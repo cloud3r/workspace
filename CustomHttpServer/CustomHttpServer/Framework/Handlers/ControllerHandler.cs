@@ -1,5 +1,6 @@
 ﻿using System.Net;
 using System.Reflection;
+using CustomHttpServer.Attributes;
 
 namespace CustomHttpServer.Framework.Handlers;
 
@@ -24,27 +25,31 @@ public class ControllerHandler : Handler
             // получаем от контроллера все его методы ищем по custom аттрибут и ищем по типу имени у аттрибута http attribute(http method(get,post)) забирем метод если не пустой мы
             // получаем его параметры(если есть какие-то файлы мы их передаем), queryparams мы преобразуем параметры в объект(массив ключ значение) и вызываем сам метод Instance создаем instance этого контролера
             // те параметры которые в логине приходили, contenttype приходящего request form
-            string[] strParams = context.Request.Url 
+            string[] segments = context.Request.Url 
                 .Segments 
-                .Skip(2) 
                 .Select(s => s.Replace("/", "")) 
-                .ToArray(); 
- 
+                .ToArray();
+            string controllerRoute = segments[0];
+            string methodRoute = segments[1];
+            string attributeName = $"{context.Request.HttpMethod[0]}{context.Request.HttpMethod[1..].ToLower()}Attribute";
             var assembly = Assembly.GetExecutingAssembly(); 
  
-            var controller = assembly.GetTypes().Where(t => Attribute.IsDefined(t, typeof(HttpController))).FirstOrDefault(c => c.Name.ToLower() == controllerName.ToLower()); 
- 
-            if (controller == null) return false; 
- 
-            var test = typeof(HttpController).Name; 
-            var method = controller.GetMethods() 
-                .FirstOrDefault(t => t.GetCustomAttributes(true) 
-                    .Any(attr => attr.GetType().Name == $"Http{context.Request.HttpMethod}")); 
- 
-            if (method == null) return false; 
+            var controller = assembly.GetTypes()
+                .Where(t =>
+                    t.GetCustomAttribute<ControllerAttribute>() != null)
+                .FirstOrDefault(c =>
+                    c.GetCustomAttribute<ControllerAttribute>()!.Route == controllerRoute);
+
+            var test = typeof(ControllerAttribute).Name; 
+            var method = controller.GetMethods()
+                .Where(t => t.GetCustomAttributes(true)
+                    .Any(attr => attr.GetType().Name == attributeName))
+                .FirstOrDefault(c=>c.GetCustomAttribute<GetAttribute>()!.Route==methodRoute);
+                
+            
  
             object[] queryParams = method.GetParameters() 
-                .Select((p, i) => Convert.ChangeType(strParams[i], p.ParameterType)) 
+                .Select((p, i) => Convert.ChangeType(segments[i], p.ParameterType)) 
                 .ToArray(); 
  
             var ret = method.Invoke(Activator.CreateInstance(controller), queryParams);
