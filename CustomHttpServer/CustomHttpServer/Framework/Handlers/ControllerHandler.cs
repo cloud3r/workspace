@@ -10,53 +10,100 @@ public class ControllerHandler : Handler
     {
         var request = context.Request;
         var response = context.Response;
-        string path = request.Url.LocalPath;
-        bool isFile = path.Contains(".");
+        Console.WriteLine($"Method: {request.HttpMethod}");
+        Console.WriteLine($"ContentType: {request.ContentType}");
+        Console.WriteLine($"ContentLength: {request.ContentLength64}");
 
-        if (isFile)
+        try
         {
-            // Логика выбора метода контроллера
-            // controllerName - получаем от клиента(/controller/method(/auth/login))
-            // Auth это класс условно. А login  метод в этом классе
-            // Иметь возможность добавить новый контроллер в папку Controllers и они должны автоматом подключиться с помощью рефлексии и кода ниже(что-то лишнее возмжожно)
-            // Забираем string params если они есть и делаем как параметр дальше создаем рефлексию говорим что у нас есть решение и мы хотим работать забираем все его типы
-            // ищем в типах типы у которы аттрибут имеет httpcontroller attribute дальше ищем первого у которого имя совпадает с controllername to lower(имя самого аттрибута который в нем зашит
-            // controller name надо где-то взять где-то должно быть переменной(из пути) если нет контроллера то должны что-то вернуть(false) если нашли контроллер то мы должны вызвать метод
-            // получаем от контроллера все его методы ищем по custom аттрибут и ищем по типу имени у аттрибута http attribute(http method(get,post)) забирем метод если не пустой мы
-            // получаем его параметры(если есть какие-то файлы мы их передаем), queryparams мы преобразуем параметры в объект(массив ключ значение) и вызываем сам метод Instance создаем instance этого контролера
-            // те параметры которые в логине приходили, contenttype приходящего request form
-            string[] segments = context.Request.Url 
-                .Segments 
-                .Select(s => s.Replace("/", "")) 
+            bool isFile = request.Url!.LocalPath.Contains('.');
+
+            if (isFile)
+            {
+                if (Successor != null) await Successor.HandleRequest(context);
+                else await Send(response, 404, "Not found");
+                return;
+            }
+
+            string[] segments = request.Url.Segments
+                .Select(s => s.Trim('/'))
+                .Where(s => s.Length > 0)
                 .ToArray();
+
+            if (segments.Length < 2)
+            {
+                await Send(response, 404, "Not found");
+                return;
+            }
+
             string controllerRoute = segments[0];
             string methodRoute = segments[1];
-            string attributeName = $"{context.Request.HttpMethod[0]}{context.Request.HttpMethod[1..].ToLower()}Attribute";
-            var assembly = Assembly.GetExecutingAssembly(); 
- 
-            var controller = assembly.GetTypes()
-                .Where(t =>
-                    t.GetCustomAttribute<ControllerAttribute>() != null)
-                .FirstOrDefault(c =>
-                    c.GetCustomAttribute<ControllerAttribute>()!.Route == controllerRoute);
+            string attributeName =
+                $"{request.HttpMethod[0]}{request.HttpMethod[1..].ToLower()}Attribute";
 
-            var test = typeof(ControllerAttribute).Name; 
+            var controller = Assembly.GetExecutingAssembly().GetTypes()
+                .FirstOrDefault(t => t.GetCustomAttribute<ControllerAttribute>()?.Route == controllerRoute);
+
+            if (controller == null)
+            {
+                await Send(response, 404, "Controller not found");
+                return;
+            }
+
             var method = controller.GetMethods()
-                .Where(t => t.GetCustomAttributes(true)
-                    .Any(attr => attr.GetType().Name == attributeName))
-                .FirstOrDefault(c=>c.GetCustomAttribute<GetAttribute>()!.Route==methodRoute);
-                
-            
- 
-            object[] queryParams = method.GetParameters() 
-                .Select((p, i) => Convert.ChangeType(segments[i], p.ParameterType)) 
-                .ToArray(); 
- 
+                .FirstOrDefault(m => m.GetCustomAttributes(true)
+                    .Any(a => a.GetType().Name == attributeName
+                              && (a as dynamic).Route == methodRoute));
+
+            if (method == null)
+            {
+                await Send(response, 404, "Method not found");
+                return;
+            }
+
+            var parameters = method.GetParameters();
+            var args = segments.Skip(2).ToArray();
+
+            if (args.Length != parameters.Length)
+            {
+                await Send(response, 400, "Bad request");
+                return;
+            }
+
+            object?[] queryParams = parameters
+                .Select((p, i) => Convert.ChangeType(args[i], p.ParameterType))
+                .ToArray();
+
             var ret = method.Invoke(Activator.CreateInstance(controller), queryParams);
+
+            if (ret is Task t)
+            {
+                await t;
+                ret = t.GetType().IsGenericType ? ((dynamic)t).Result : null;
+            }
+
+            await Send(response, 200, ret?.ToString() ?? "");
         }
-        else if (Successor != null) 
+        catch (Exception ex)
         {
-            Successor.HandleRequest(context);
+            Console.WriteLine(ex);
+            try
+            {
+                await Send(response, 500, "Internal server error");
+            }
+            catch
+            {
+            }
+        }
+
+        static async Task Send(HttpListenerResponse response, int status, string body)
+        {
+            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(body);
+            response.StatusCode = status;
+            response.ContentType = "text/plain; charset=utf-8";
+            response.ContentLength64 = bytes.Length;
+            await response.OutputStream.WriteAsync(bytes);
+            response.Close();
         }
     }
 }

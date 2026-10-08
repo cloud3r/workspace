@@ -7,16 +7,17 @@ public class AuthController
 {
     // GET: /auth/login
     [Get("login")]
-    public void Login()
+    public string Login()
     {
-        // отдавть Login html
+        return "Hello from AuthController!";
     }
     
     // POST: /auth/login
     [Post("login")]
-    public void Login(string username, string password)
+    public string Login(string username, string password)
     {
         Console.WriteLine($"Username: {username}, Password: {password}");
+        return "Ok";
     }
     
 }

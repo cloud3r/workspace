@@ -6,13 +6,21 @@ public class HttpServer
 {
     private readonly ConfigurationManager _settings;
     private readonly HttpListener _listener;
+    private readonly Handler _chain;
 
     public HttpServer(ConfigurationManager settings)
     {
         _settings = settings;
         _listener = new HttpListener();
-        string prefixes = $"http://{_settings.Server.Host}:{_settings.Server.Port}{_settings.Server.Path}";
-        _listener.Prefixes.Add(prefixes);
+
+        string path = _settings.Server.Path;
+        if (!path.EndsWith("/")) path += "/";
+        _listener.Prefixes.Add($"http://{_settings.Server.Host}:{_settings.Server.Port}{path}");
+
+        Handler staticFiles = new StaticFilesHandler();
+        Handler controllers = new ControllerHandler();
+        staticFiles.Successor = controllers;
+        _chain = staticFiles;
     }
 
     public Task StartAsync()
@@ -21,10 +29,7 @@ public class HttpServer
         return ListenAsync();
     }
 
-    public void Stop()
-    {
-        _listener.Stop();
-    }
+    public void Stop() => _listener.Stop();
 
     private async Task ListenAsync()
     {
@@ -33,10 +38,10 @@ public class HttpServer
             while (_listener.IsListening)
             {
                 HttpListenerContext context = await _listener.GetContextAsync();
-                await ProcessRequestAsync(context);
+                _ = Task.Run(() => ProcessRequestAsync(context));
             }
         }
-        catch (HttpListenerException)
+        catch (Exception ex) when (ex is HttpListenerException or ObjectDisposedException)
         {
             Console.WriteLine("Сервер остановлен");
         }
@@ -44,10 +49,23 @@ public class HttpServer
 
     private async Task ProcessRequestAsync(HttpListenerContext context)
     {
-        Handler h1 = new StaticFilesHandler();
-        //Handler h2 = ();
-        //h1.Successor = h2;
-        h1.HandleRequest(context);
-        Console.WriteLine($"Обработан запрос: {context.Request.Url}");
+        try
+        {
+            await _chain.HandleRequest(context);
+            Console.WriteLine($"Обработан запрос: {context.Request.Url}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+            try
+            {
+                context.Response.StatusCode = 500;
+            }
+            catch {  }
+        }
+        finally
+        {
+            try { context.Response.Close(); } catch { }
+        }
     }
 }
